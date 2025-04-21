@@ -24,6 +24,7 @@ services:
       KEYCLOAK_HOSTNAME: backend-keycloak-auth
       KEYCLOAK_USER: admin
       KEYCLOAK_PASSWORD: admin
+      KC_CORS_ALLOWED_ORIGINS: "*"
     ports:
       - "8080:8080"
     depends_on:
