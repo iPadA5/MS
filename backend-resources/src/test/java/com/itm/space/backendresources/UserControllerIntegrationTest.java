@@ -1,27 +1,48 @@
 package com.itm.space.backendresources;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.itm.space.backendresources.api.request.UserRequest;
-import com.itm.space.backendresources.provider.KeyCloakTokenProvider;
+import com.itm.space.backendresources.api.response.UserResponse;
+import com.itm.space.backendresources.exception.BackendResourcesException;
+import com.itm.space.backendresources.service.UserService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.*;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.HttpServerErrorException;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.web.servlet.MockMvc;
+
+import java.util.Arrays;
+import java.util.List;
 import java.util.UUID;
-import static org.junit.jupiter.api.Assertions.*;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest
+@AutoConfigureMockMvc
 public class UserControllerIntegrationTest {
 
     @Autowired
-    private RestTemplate restTemplate;
+    private MockMvc mockMvc;
+
+    @Autowired
+    @MockBean
+    private UserService userService;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     @Test
-    public void testCreateUser() {
-        String jwtToken = KeyCloakTokenProvider.getAccessToken();
+    @WithMockUser(roles = {"MODERATOR"})
+    public void testCreateUserSuccess() throws Exception {
         UserRequest userRequest = new UserRequest(
                 "userName",
                 "email@em.com",
@@ -29,67 +50,70 @@ public class UserControllerIntegrationTest {
                 "firstName",
                 "lastName"
         );
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(jwtToken);
-        ResponseEntity<Void> responseEntity = restTemplate.exchange(
-                "http://backend-gateway-client:9191/api/users", HttpMethod.POST,
-                new HttpEntity<>(userRequest, headers), Void.class);
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
+        mockMvc.perform(
+                post("/api/users")
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(userRequest)))
+                .andExpect(status().isOk());
+        verify(userService, times(1)).createUser(any(UserRequest.class));
     }
 
     @Test
-    public void testCreateExistingUser() {
-        String jwtToken = KeyCloakTokenProvider.getAccessToken();
+    @WithMockUser(roles = {"MODERATOR"})
+    public void testCreateUserBadRequest() throws Exception {
         UserRequest userRequest = new UserRequest(
-                "userName",
+                "",
                 "email@em.com",
                 "1234",
                 "firstName",
                 "lastName"
         );
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(jwtToken);
-        HttpClientErrorException exception = assertThrows(HttpClientErrorException.class, () -> restTemplate.exchange(
-        "http://backend-gateway-client:9191/api/users",
-        HttpMethod.POST, new HttpEntity<>(userRequest, headers), Void.class));
-        assertEquals(HttpStatus.CONFLICT, exception.getStatusCode());
+        mockMvc.perform(
+                post("/api/users")
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(userRequest)))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
-    public void testGetUserById(){
-        String jwtToken = KeyCloakTokenProvider.getAccessToken();
-        String UUID = "9faf67e1-569e-4479-843e-272529d7c53b";
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(jwtToken);
-        ResponseEntity<Void> responseEntity = restTemplate.exchange(
-                ("http://backend-gateway-client:9191/api/users/" + UUID),
-                HttpMethod.GET, new HttpEntity<>(headers), Void.class);
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-    }
-
-    @Test
-    public void testGetUserByIdNotFound(){
-        String jwtToken = KeyCloakTokenProvider.getAccessToken();
-        String uuId = UUID.randomUUID().toString();
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(jwtToken);
-        HttpServerErrorException exception = assertThrows(HttpServerErrorException.class, () -> restTemplate.exchange("http://backend-gateway-client:9191/api/users/" + uuId,
-                HttpMethod.GET, new HttpEntity<>(headers), Void.class));
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, exception.getStatusCode());
-    }
-
-    @Test
-    public void testHello() {
-        String jwtToken = KeyCloakTokenProvider.getAccessToken();
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(jwtToken);
-        ResponseEntity<String> responseEntity = restTemplate.exchange(
-                "http://backend-gateway-client:9191/api/users/hello",
-                HttpMethod.GET, new HttpEntity<>(headers), String.class
+    @WithMockUser(roles = {"MODERATOR"})
+    public void testGetUserByIdSuccess() throws Exception {
+        UUID id = UUID.randomUUID();
+        String stringId = id.toString();
+        List<String> roles = Arrays.asList("MODERATOR, ADMIN");
+        List<String> groups = Arrays.asList("MODERATORS");
+        UserResponse userResponse = new UserResponse(
+                id,
+                "fname",
+                "lname",
+                "email@a",
+                roles,
+                groups
         );
-        assertNotNull(responseEntity.getBody());
-        assertEquals("9faf67e1-569e-4479-843e-272529d7c53b", responseEntity.getBody());
+        when(userService.getUserById(id)).thenReturn(userResponse);
+        mockMvc.perform(
+                get("/api/users/{id}", id).contentType(MediaType.APPLICATION_JSON)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.userId").value(stringId))
+                .andExpect(jsonPath("$.firstName").value("fname"))
+                .andExpect(jsonPath("$.lastName").value("lname"))
+                .andExpect(jsonPath("$.email").value("email@a"))
+                .andExpect(jsonPath("$.roles").isArray())
+                .andExpect(jsonPath("$.roles").isNotEmpty())
+                .andExpect(jsonPath("$.groups").isArray());
+        verify(userService, times(1)).getUserById(id);
+    }
+
+    @Test
+    @WithMockUser(roles = {"MODERATOR"})
+    public void testGetUserNotFound() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(userService.getUserById(id)).thenThrow(new BackendResourcesException("Not found", HttpStatus.NOT_FOUND));
+        mockMvc.perform(
+                get("/api/users/{id}", id).contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isNotFound());
+
     }
 }
+
